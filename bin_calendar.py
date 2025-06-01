@@ -28,11 +28,7 @@ import shutil
 from pathlib import Path
 import secrets
 import string
-import yaml
-import ansible.parsing.vault
-from ansible.parsing.vault import VaultLib
-from ansible.parsing.vault import VaultSecret
-import getpass
+from selenium.webdriver.support.ui import Select
 
 # Configure logging with secure file permissions
 log_file = Path('bin_calendar.log')
@@ -49,50 +45,6 @@ log_file.chmod(0o600)  # Set secure permissions
 
 # Load environment variables
 load_dotenv()
-
-def get_vault_password() -> str:
-    """Get Ansible vault password from environment or prompt."""
-    vault_password = os.getenv('ANSIBLE_VAULT_PASSWORD')
-    if not vault_password:
-        vault_password = getpass.getpass("Enter Ansible vault password: ")
-    return vault_password
-
-def get_credentials() -> dict:
-    """Get credentials from Ansible vault."""
-    try:
-        vault_password = get_vault_password()
-        vault = VaultLib([(VaultSecret(vault_password.encode()), None)])
-        creds_path = Path('ansible/credentials.yml')
-        
-        if not creds_path.exists():
-            raise FileNotFoundError("Ansible credentials file not found at ansible/credentials.yml")
-        
-        with open(creds_path, 'rb') as f:
-            encrypted_data = f.read()
-            decrypted_data = vault.decrypt(encrypted_data)
-            creds = yaml.safe_load(decrypted_data)
-            
-            if not isinstance(creds, dict):
-                raise ValueError("Invalid credentials format in vault file")
-            
-            return creds
-            
-    except Exception as e:
-        logger.error(f"Error retrieving credentials: {e}")
-        raise
-
-# Get GitHub token from Ansible vault if not in environment
-if not os.getenv('GITHUB_TOKEN'):
-    try:
-        creds = get_credentials()
-        github_token = creds.get('github_pat')
-        if github_token:
-            os.environ['GITHUB_TOKEN'] = github_token
-            logger.info("Successfully retrieved GitHub token from Ansible vault")
-        else:
-            logger.warning("GitHub token not found in Ansible vault")
-    except Exception as e:
-        logger.error(f"Failed to retrieve GitHub token: {e}")
 
 # Constants
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -226,6 +178,14 @@ def get_bin_schedule(address: str) -> List[Tuple[str, datetime]]:
         logger.error("Invalid address format")
         return []
 
+    # Read dropdown values from environment
+    suburb_value = os.getenv('SUBURB', '').strip()
+    street_value = os.getenv('STREET', '').strip()
+    house_value = os.getenv('HOUSE_NUMBER', '').strip()
+    if not suburb_value or not street_value or not house_value:
+        logger.error("Missing SUBURB, STREET, or HOUSE_NUMBER in .env file")
+        return []
+
     temp_dir = generate_secure_temp_dir()
     chrome_options = Options()
     chrome_options.add_argument('--headless')
@@ -249,19 +209,29 @@ def get_bin_schedule(address: str) -> List[Tuple[str, datetime]]:
         # Navigate to the website
         driver.get(WEBSITE_URL)
         
-        # Wait for the address input field and enter the address
-        address_input = WebDriverWait(driver, REQUEST_TIMEOUT).until(
-            EC.presence_of_element_located((By.ID, 'address'))
+        # --- NEW DROPDOWN LOGIC ---
+        # Suburb
+        suburb_xpath = '/html/body/form/div[5]/div/div/div/div[1]/div/div[2]/div/div/div[2]/div/div[2]/div/div/div[1]/div[2]/select'
+        suburb_dropdown = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, suburb_xpath))
         )
-        address_input.clear()
-        address_input.send_keys(address)
-        
-        # Click the search button
-        search_button = WebDriverWait(driver, REQUEST_TIMEOUT).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
+        Select(suburb_dropdown).select_by_visible_text(suburb_value)
+
+        # Street
+        street_xpath = '/html/body/form/div[5]/div/div/div/div[1]/div/div[2]/div/div/div[2]/div/div[2]/div/div/div[2]/div[2]/select'
+        street_dropdown = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, street_xpath))
         )
-        search_button.click()
-        
+        Select(street_dropdown).select_by_visible_text(street_value)
+
+        # House Number
+        house_xpath = '/html/body/form/div[5]/div/div/div/div[1]/div/div[2]/div/div/div[2]/div/div[2]/div/div/div[3]/div[2]/select'
+        house_dropdown = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, house_xpath))
+        )
+        Select(house_dropdown).select_by_visible_text(house_value)
+        # --- END NEW DROPDOWN LOGIC ---
+
         # Wait for results to load
         time.sleep(2)
         

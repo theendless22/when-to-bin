@@ -5,8 +5,8 @@
 ansible/
 
 # Google Calendar credentials
-credentials.json
-token.pickle
+calendarcredentials.json
+calendartoken.pickle
 
 # Logs
 *.log
