@@ -1,74 +1,69 @@
-# Bin Collection Calendar
+# ♻️ When-to-Bin: Automated Bin Collection Calendar Integration 🗑️
 
-A Python application that automatically adds your local council's bin collection schedule to your Google Calendar.
+This script automates the process of checking your bin collection schedule from [The Hills Shire Council](https://www.thehills.nsw.gov.au/Residents/Waste-Recycling/When-is-my-bin-day/Check-which-bin-to-put-out) and adds reminders to your Google Calendar **one day before each collection**.
 
-## Features
+## ✨ Features
 
-- Scrapes bin collection schedule from The Hills Shire Council website
-- Validates and processes collection dates
-- Automatically adds events to Google Calendar
-- Sends email and popup reminders 24 hours before collection
-- Secure handling of credentials and sensitive data
+- 🤖 Uses Selenium to interact with the council website and select your address.
+- 📅 Extracts upcoming bin collection dates for Rubbish, Garden Organics, and Recycling.
+- ⏰ Adds Google Calendar events/reminders for each bin type, scheduled for the day before collection.
+- 🔒 Secure handling of credentials and tokens.
+- 📝 Logging of all actions and errors.
 
-## Prerequisites
+## 🛠️ Requirements
 
-- Python 3.8 or higher
-- Google Calendar API credentials
-- Chrome browser installed
-- The Hills Shire Council address
+- 🐍 Python 3.8+
+- 🌐 Google Chrome browser
+- ⚙️ ChromeDriver (automatically managed)
+- ☁️ Google Cloud project with Calendar API enabled and OAuth credentials (`calendarcredentials.json`)
+- The following Python packages (install with `pip install -r requirements.txt`):
+  - selenium
+  - webdriver-manager
+  - google-auth
+  - google-auth-oauthlib
+  - google-api-python-client
+  - python-dotenv
 
-## Installation
+## 🚀 Setup
 
-1. Clone the repository:
-```bash
-git clone https://github.com/YOUR_USERNAME/bin-collection-calendar.git
-cd bin-collection-calendar
-```
+1. **Clone this repository.**
 
-2. Create and activate a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+2. **Create a `.env` file** in the project root with your address details:
+    ```
+    SUBURB=<ADD HERE>
+    STREET=<ADD HERE>
+    HOUSE_NUMBER=<ADD HERE>
+    ADDRESS=<ADD HERE>
+    ```
 
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+3. **Add your Google Calendar OAuth credentials**  
+   Download your `calendarcredentials.json` from the Google Cloud Console and place it in the project root.
 
-4. Set up environment variables:
-   - Copy `.env.example` to `.env`
-   - Add your address to the `.env` file
+4. **Install dependencies:**
+    ```sh
+    pip install -r requirements.txt
+    ```
 
-5. Set up Google Calendar API:
-   - Go to [Google Cloud Console](https://console.cloud.google.com/)
-   - Create a new project
-   - Enable the Google Calendar API
-   - Create OAuth 2.0 credentials
-   - Download and save as `credentials.json` in the project root
+5. **Run the script:**
+    ```sh
+    python bin_calendar.py
+    ```
+   - 🖥️ The first time you run it, a browser window will open for Google authentication. Approve access to your Google Calendar.
+   - 🔑 The script will create a `token.pickle` file for future authentication.
 
-## Usage
+## 📝 Notes
 
-Run the script:
-```bash
-python bin_calendar.py
-```
+- 📆 **Events are created for the day before each bin collection.**
+- 👤 Only the user(s) listed as test users in your Google Cloud OAuth consent screen can use the script unless the app is verified by Google.
+- 🚫 `token.pickle` and `calendarcredentials.json` are ignored by Git for your security.
+- 📄 Logs are written to `bin_calendar.log`.
 
-## Security
+## 🛟 Troubleshooting
 
-- All sensitive data is stored in environment variables
-- Credentials are never committed to the repository
-- Input validation and sanitization implemented
-- Secure error handling and logging
+- ⚠️ If you see errors about ChromeDriver, ensure it has executable permissions (`chmod +x path/to/chromedriver`).
+- 🔒 If you see "Access blocked: ... has not completed the Google verification process", add your email as a test user in the Google Cloud Console.
+- 🏷️ If the script cannot find your bin schedule, check that your `.env` values match the dropdown options on the council website.
 
-## Contributing
+---
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
+**Maintained by:** Shruthi Naidu
