@@ -28,11 +28,7 @@ import shutil
 from pathlib import Path
 import secrets
 import string
-import yaml
-import ansible.parsing.vault
-from ansible.parsing.vault import VaultLib
-from ansible.parsing.vault import VaultSecret
-import getpass
+from selenium.webdriver.support.ui import Select
 
 # Configure logging with secure file permissions
 log_file = Path('bin_calendar.log')
@@ -50,56 +46,12 @@ log_file.chmod(0o600)  # Set secure permissions
 # Load environment variables
 load_dotenv()
 
-def get_vault_password() -> str:
-    """Get Ansible vault password from environment or prompt."""
-    vault_password = os.getenv('ANSIBLE_VAULT_PASSWORD')
-    if not vault_password:
-        vault_password = getpass.getpass("Enter Ansible vault password: ")
-    return vault_password
-
-def get_credentials() -> dict:
-    """Get credentials from Ansible vault."""
-    try:
-        vault_password = get_vault_password()
-        vault = VaultLib([(VaultSecret(vault_password.encode()), None)])
-        creds_path = Path('ansible/credentials.yml')
-        
-        if not creds_path.exists():
-            raise FileNotFoundError("Ansible credentials file not found at ansible/credentials.yml")
-        
-        with open(creds_path, 'rb') as f:
-            encrypted_data = f.read()
-            decrypted_data = vault.decrypt(encrypted_data)
-            creds = yaml.safe_load(decrypted_data)
-            
-            if not isinstance(creds, dict):
-                raise ValueError("Invalid credentials format in vault file")
-            
-            return creds
-            
-    except Exception as e:
-        logger.error(f"Error retrieving credentials: {e}")
-        raise
-
-# Get GitHub token from Ansible vault if not in environment
-if not os.getenv('GITHUB_TOKEN'):
-    try:
-        creds = get_credentials()
-        github_token = creds.get('github_pat')
-        if github_token:
-            os.environ['GITHUB_TOKEN'] = github_token
-            logger.info("Successfully retrieved GitHub token from Ansible vault")
-        else:
-            logger.warning("GitHub token not found in Ansible vault")
-    except Exception as e:
-        logger.error(f"Failed to retrieve GitHub token: {e}")
-
 # Constants
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 30
 TOKEN_FILE = 'token.pickle'
-CREDENTIALS_FILE = 'credentials.json'
+CREDENTIALS_FILE = 'calendarcredentials.json'
 WEBSITE_URL = 'https://www.thehills.nsw.gov.au/Residents/Waste-Recycling/When-is-my-bin-day/Check-which-bin-to-put-out'
 MAX_ADDRESS_LENGTH = 200
 MIN_ADDRESS_LENGTH = 5
@@ -111,22 +63,24 @@ def generate_secure_temp_dir() -> Path:
     return temp_dir
 
 def validate_address(address: str) -> bool:
-    """Validate the address format with enhanced security."""
+    """Validate the address format to ensure suburb, street, and house number are present."""
     if not isinstance(address, str):
         logger.error("Address must be a string")
         return False
-        
+
     address = address.strip()
-    if not address or len(address) < MIN_ADDRESS_LENGTH or len(address) > MAX_ADDRESS_LENGTH:
-        logger.error(f"Address length must be between {MIN_ADDRESS_LENGTH} and {MAX_ADDRESS_LENGTH} characters")
+    # Expecting format: "house_number, street, suburb"
+    parts = [part.strip() for part in address.split(',')]
+    if len(parts) != 3:
+        logger.error("Address must be in the format: 'house_number, street, suburb'")
         return False
-        
-    # Enhanced validation pattern
-    pattern = r'^[a-zA-Z0-9\s,.-]+$'
-    if not re.match(pattern, address):
-        logger.error("Address contains invalid characters")
+
+    house, street, suburb = parts
+    if not house or not street or not suburb:
+        logger.error("House number, street, and suburb must all be provided")
         return False
-        
+
+    # You can add more specific validation for each part if needed
     return True
 
 def get_google_calendar_service() -> Optional[build]:
@@ -174,7 +128,7 @@ def get_google_calendar_service() -> Optional[build]:
         return None
 
 def add_to_calendar(service: build, bin_type: str, collection_date: datetime) -> bool:
-    """Add event to calendar with enhanced security."""
+    """Add event to calendar with enhanced security. Event is set a day before collection."""
     try:
         # Validate inputs
         if not isinstance(bin_type, str) or not bin_type.strip():
@@ -191,15 +145,18 @@ def add_to_calendar(service: build, bin_type: str, collection_date: datetime) ->
             logger.error("Bin type too long")
             return False
 
+        # Set event date to one day before collection
+        reminder_date = collection_date - timedelta(days=1)
+
         event = {
-            'summary': f'{bin_type} Bin Collection',
-            'description': 'Time to put out your bin for collection',
+            'summary': f'{bin_type} Bin Collection Tomorrow',
+            'description': f'Reminder: {bin_type} bin will be collected on {collection_date.strftime("%A, %d %B %Y")}',
             'start': {
-                'date': collection_date.strftime('%Y-%m-%d'),
+                'date': reminder_date.strftime('%Y-%m-%d'),
                 'timeZone': 'Australia/Sydney',
             },
             'end': {
-                'date': collection_date.strftime('%Y-%m-%d'),
+                'date': reminder_date.strftime('%Y-%m-%d'),
                 'timeZone': 'Australia/Sydney',
             },
             'reminders': {
@@ -226,9 +183,17 @@ def get_bin_schedule(address: str) -> List[Tuple[str, datetime]]:
         logger.error("Invalid address format")
         return []
 
+    # Read dropdown values from environment
+    suburb_value = os.getenv('SUBURB', '').strip()
+    street_value = os.getenv('STREET', '').strip()
+    house_value = os.getenv('HOUSE_NUMBER', '').strip()
+    if not suburb_value or not street_value or not house_value:
+        logger.error("Missing SUBURB, STREET, or HOUSE_NUMBER in .env file")
+        return []
+
     temp_dir = generate_secure_temp_dir()
     chrome_options = Options()
-    chrome_options.add_argument('--headless')
+    #chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
@@ -240,8 +205,11 @@ def get_bin_schedule(address: str) -> List[Tuple[str, datetime]]:
     
     driver = None
     try:
+        chrome_path = ChromeDriverManager().install()
+        if "THIRD_PARTY_NOTICES.chromedriver" in chrome_path:
+            chrome_path = chrome_path.replace("THIRD_PARTY_NOTICES.chromedriver", "chromedriver")
         driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()),
+            service=Service(chrome_path),
             options=chrome_options
         )
         driver.set_page_load_timeout(REQUEST_TIMEOUT)
@@ -249,44 +217,64 @@ def get_bin_schedule(address: str) -> List[Tuple[str, datetime]]:
         # Navigate to the website
         driver.get(WEBSITE_URL)
         
-        # Wait for the address input field and enter the address
-        address_input = WebDriverWait(driver, REQUEST_TIMEOUT).until(
-            EC.presence_of_element_located((By.ID, 'address'))
+        # --- NEW DROPDOWN LOGIC ---
+        # Suburb
+        suburb_xpath = '/html/body/form/div[5]/div/div/div/div[1]/div/div[2]/div/div/div[2]/div/div[2]/div/div/div[1]/div[2]/select'
+        suburb_dropdown = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, suburb_xpath))
         )
-        address_input.clear()
-        address_input.send_keys(address)
-        
-        # Click the search button
-        search_button = WebDriverWait(driver, REQUEST_TIMEOUT).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
+        Select(suburb_dropdown).select_by_visible_text(suburb_value)
+
+        # Street
+        street_xpath = '/html/body/form/div[5]/div/div/div/div[1]/div/div[2]/div/div/div[2]/div/div[2]/div/div/div[2]/div[2]/select'
+        street_dropdown = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, street_xpath))
         )
-        search_button.click()
-        
+        Select(street_dropdown).select_by_visible_text(street_value)
+
+        # House Number
+        house_xpath = '/html/body/form/div[5]/div/div/div/div[1]/div/div[2]/div/div/div[2]/div/div[2]/div/div/div[3]/div[2]/select'
+        house_dropdown = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, house_xpath))
+        )
+        Select(house_dropdown).select_by_visible_text(house_value)
+        # --- END NEW DROPDOWN LOGIC ---
+
         # Wait for results to load
         time.sleep(2)
         
         # Get the bin schedule
         schedule = []
-        bin_elements = WebDriverWait(driver, REQUEST_TIMEOUT).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.bin-schedule-item'))
+        # bin_elements = WebDriverWait(driver, REQUEST_TIMEOUT).until(
+        #    EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.bin-schedule-item'))
+        # )
+        
+        # Wait for at least one bin type to appear
+        bin_types = WebDriverWait(driver, REQUEST_TIMEOUT).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'h4.ng-binding'))
         )
         
-        for element in bin_elements:
+        for bin_type_elem in bin_types:
             try:
-                bin_type = element.find_element(By.CSS_SELECTOR, '.bin-type').text
-                date_text = element.find_element(By.CSS_SELECTOR, '.collection-date').text
-                
-                # Validate date format
-                try:
-                    collection_date = datetime.strptime(date_text, '%d/%m/%Y')
-                except ValueError:
-                    logger.error(f"Invalid date format: {date_text}")
+                bin_type = bin_type_elem.text.strip()
+                # The date is in the next sibling <p> element
+                date_elem = bin_type_elem.find_element(By.XPATH, 'following-sibling::p[1]')
+                date_text = date_elem.text.strip()
+                # Extract the date string using regex
+                match = re.search(r'Next collected on (.+)', date_text)
+                if not match:
+                    logger.error(f"Could not parse date from text: {date_text}")
                     continue
-                
-                # Validate the date is not in the past
+                date_str = match.group(1).strip()
+                # Parse the date (e.g., 'Thursday, 5 June 2025')
+                try:
+                    collection_date = datetime.strptime(date_str, '%A, %d %B %Y')
+                except ValueError:
+                    logger.error(f"Invalid date format: {date_str}")
+                    continue
                 if collection_date.date() >= datetime.now().date():
                     schedule.append((bin_type, collection_date))
-            except (ValueError, WebDriverException) as e:
+            except Exception as e:
                 logger.error(f"Error processing bin element: {str(e)}")
                 continue
         
@@ -313,14 +301,14 @@ def get_bin_schedule(address: str) -> List[Tuple[str, datetime]]:
 def main():
     """Main function with enhanced security."""
     try:
-        # Get and validate address
-        address = os.getenv('ADDRESS')
-        if not address or not validate_address(address):
-            logger.error("Invalid or missing address in .env file")
+        # Get address from environment variable (optional, for validation/logging)
+        address = os.getenv('ADDRESS', '').strip()
+        if not address:
+            logger.error("ADDRESS not set in environment or .env file")
             return
 
-        # Get bin schedule
-        logger.info(f"Getting bin schedule for {address}...")
+        # Get bin schedule (dropdown values are read from env)
+        logger.info("Getting bin schedule for configured dropdown values...")
         schedule = get_bin_schedule(address)
         
         if not schedule:
@@ -348,4 +336,4 @@ def main():
         logger.error(f"Unexpected error in main function: {str(e)}")
 
 if __name__ == '__main__':
-    main() 
+    main()
